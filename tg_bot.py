@@ -505,11 +505,11 @@ def handle_message(msg: dict):
     if text == "📊 Статус" or low == "/status":
         send(chat_id, build_status_text(), reply_markup=main_menu()); return
 
-    if text == "📂 Input" or low == "/input":
+    if text in ("📂 Input", "📂 Что в input") or low == "/input":
         push_task("list_input", uid, chat_id=chat_id)
         send(chat_id, "📂 Запрашиваю состояние input/ у ПК…", reply_markup=main_menu()); return
 
-    if text == "🔁 Retry" or low == "/retry":
+    if text in ("🔁 Retry", "🔁 Перезалив pending/failed") or low == "/retry":
         push_task("retry_failed_pending", uid, chat_id=chat_id)
         send(chat_id, "🔁 Команда отправлена. Жду отчёт от ПК…", reply_markup=main_menu()); return
 
@@ -546,11 +546,11 @@ def handle_message(msg: dict):
             error_lines.clear()
         send(chat_id, "🧹 Буфер ошибок очищен.", reply_markup=main_menu()); return
 
-    if text == "📤 Лог-файлы" or low == "/log_file":
+    if text in ("📤 Лог-файлы", "📤 Лог-файл") or low == "/log_file":
         push_task("send_log_file", uid, chat_id=chat_id, args={"which": "both"})
         send(chat_id, "📤 Сейчас пришлю лог-файлы…", reply_markup=main_menu()); return
 
-    if text == "📸 Скрин" or low == "/screen":
+    if text in ("📸 Скрин", "📸 Скрин ПК") or low == "/screen":
         push_task("screenshot", uid, chat_id=chat_id)
         send(chat_id, "📸 Делаю скрин…", reply_markup=main_menu()); return
 
@@ -564,7 +564,7 @@ def handle_message(msg: dict):
         send(chat_id, f"🧹 Очистил очередь ({n} задач).", reply_markup=main_menu()); return
 
     # --- уведомления (toggle) ---
-    if text == "🔔 Smart" or low == "/smart":
+    if text in ("🔔 Smart", "🔔 Smart-уведомления") or low == "/smart":
         with state_lock:
             if int(chat_id) in smart_watchers:
                 smart_watchers.discard(int(chat_id))
@@ -575,7 +575,7 @@ def handle_message(msg: dict):
                 msg2 = "🔔 Smart включены.\nПрисылаю только важные события (запуск/финиш/прогресс/ретраи)."
         send(chat_id, msg2, reply_markup=main_menu()); return
 
-    if text == "👁 All logs" or low == "/all_logs":
+    if text in ("👁 All logs", "👁 Все логи", "👁 Вкл логи") or low in ("/all_logs", "/watch_on"):
         with state_lock:
             if int(chat_id) in all_log_watchers:
                 all_log_watchers.discard(int(chat_id))
@@ -585,6 +585,13 @@ def handle_message(msg: dict):
                 smart_watchers.discard(int(chat_id))
                 msg2 = "👁 Все логи поедут сюда. Может быть много сообщений."
         send(chat_id, msg2, reply_markup=main_menu()); return
+
+    # legacy кнопка «🙈 Тихо» → отписать от всего
+    if text in ("🙈 Тихо", "🙈 Выкл логи") or low in ("/watch_off", "/quiet"):
+        with state_lock:
+            all_log_watchers.discard(int(chat_id))
+            smart_watchers.discard(int(chat_id))
+        send(chat_id, "🙈 Уведомления выключены.", reply_markup=main_menu()); return
 
     # --- меню питания ---
     if text == "⚙️ Управление ПК" or low == "/power":
