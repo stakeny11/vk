@@ -216,7 +216,8 @@ def video_seconds_inline():
 
 # ---------- AUTH ----------
 def is_authed(uid: int) -> bool:
-    return uid == OWNER_USER_ID or uid in authed_users
+    # Доступ ТОЛЬКО у владельца.
+    return uid == OWNER_USER_ID
 
 def is_admin(uid: int) -> bool:
     return uid in admins
@@ -449,21 +450,9 @@ def handle_message(msg: dict):
     if not chat_id or not uid:
         return
 
-    # ---- авторизация ----
+    # ---- авторизация: только владелец ----
     if not is_authed(uid):
-        if uid in pending_code:
-            if text == ACCESS_CODE:
-                with state_lock:
-                    authed_users.add(uid); pending_code.discard(uid)
-                send(chat_id, "✅ Доступ выдан.", reply_markup=main_menu())
-            else:
-                send(chat_id, "❌ Неверный код.")
-            return
-        if text in ("/start", "/menu") or "меню" in text.lower():
-            with state_lock:
-                pending_code.add(uid)
-            send(chat_id, "🔒 Введи код доступа.")
-            return
+        print(f"[auth] блок: uid={uid} @{user.get('username','')} text={text[:60]!r}", flush=True)
         return
 
     # ---- видео-документы ----
