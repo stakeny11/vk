@@ -166,7 +166,7 @@ def main_menu():
             [{"text": "▶️ Запустить заливку"}, {"text": "⏹ Стоп"}],
             [{"text": "🔍 Что сейчас"}, {"text": "📊 Статус"}],
             [{"text": "📂 Input"}, {"text": "📈 Статистика"}],
-            [{"text": "🔁 Retry"}, {"text": "🧹 Очистить очередь"}],
+            [{"text": "🔁 Retry"}, {"text": "⚖️ Раскидать input"}, {"text": "🧹 Очистить очередь"}],
             [{"text": "📸 Скрин"}, {"text": "🎬 Видео ПК"}],
             [{"text": "📜 Лог"}, {"text": "📋 Ошибки"}, {"text": "📤 Лог-файлы"}],
             [{"text": "🔔 Smart"}, {"text": "👁 All logs"}],
@@ -501,6 +501,10 @@ def handle_message(msg: dict):
     if text in ("🔁 Retry", "🔁 Перезалив pending/failed") or low == "/retry":
         push_task("retry_failed_pending", uid, chat_id=chat_id)
         send(chat_id, "🔁 Команда отправлена. Жду отчёт от ПК…", reply_markup=main_menu()); return
+
+    if text in ("⚖️ Раскидать input", "⚖️ Раскидать Input") or low in ("/distribute_input", "/spread_input"):
+        push_task("distribute_input_even", uid, chat_id=chat_id)
+        send(chat_id, "⚖️ Раскидываю input/*.mp4 по папкам групп…", reply_markup=main_menu()); return
 
     if text == "📈 Статистика" or low.startswith("/stats"):
         period = "today"
