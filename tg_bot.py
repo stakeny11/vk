@@ -15,6 +15,7 @@ tg_bot.py — Telegram-бот для Railway.
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -82,6 +83,12 @@ PENDING_FILES_TTL_SEC = 600
 
 # Действие после завершения залива (None | "shutdown" | "sleep" | "lock")
 power_after_finish: str | None = None
+
+# FSM для диалога ручного ввода параметров статистики клипов.
+# pending_stats_dialog[chat_id] = {"step": "from"/"to"/"views", "date_from": ..., "date_to": ..., "started_at": ts}
+# Состояние теряется через 5 минут бездействия.
+pending_stats_dialog: dict[int, dict] = {}
+STATS_DIALOG_TTL_SEC = 300
 
 # Какой режим уведомлений у конкретного chat_id (для toggle)
 def watcher_mode_label(chat_id: int) -> str:
@@ -166,6 +173,7 @@ def main_menu():
             [{"text": "▶️ Запустить заливку"}, {"text": "⏹ Стоп"}],
             [{"text": "🔍 Что сейчас"}, {"text": "📊 Статус"}],
             [{"text": "📂 Input"}, {"text": "📈 Статистика"}],
+            [{"text": "📁 Сбор групп"}, {"text": "🎯 Стата клипов"}],
             [{"text": "🔁 Retry"}, {"text": "⚖️ Раскидать input"}, {"text": "🧹 Очистить очередь"}],
             [{"text": "📸 Скрин"}, {"text": "🎬 Видео ПК"}],
             [{"text": "📜 Лог"}, {"text": "📋 Ошибки"}, {"text": "📤 Лог-файлы"}],
@@ -173,6 +181,46 @@ def main_menu():
             [{"text": "⚙️ Управление ПК"}, {"text": "⏏️ После залива"}],
         ],
         "resize_keyboard": True,
+    }
+
+
+def clips_stats_period_inline():
+    """Быстрые варианты периода для статистики клипов."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "📅 7 дней",   "callback_data": "stclip:7"},
+                {"text": "📅 30 дней",  "callback_data": "stclip:30"},
+            ],
+            [
+                {"text": "📅 90 дней",  "callback_data": "stclip:90"},
+                {"text": "📅 Год",       "callback_data": "stclip:365"},
+            ],
+            [
+                {"text": "⌨️ Ввести вручную", "callback_data": "stclip:custom"},
+                {"text": "❌ Отмена",          "callback_data": "stclip:cancel"},
+            ],
+        ]
+    }
+
+
+def clips_stats_threshold_inline():
+    """Быстрый выбор порога просмотров (после выбора периода)."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "≥ 100",   "callback_data": "stclipmv:100"},
+                {"text": "≥ 500",   "callback_data": "stclipmv:500"},
+            ],
+            [
+                {"text": "≥ 1 000",  "callback_data": "stclipmv:1000"},
+                {"text": "≥ 5 000",  "callback_data": "stclipmv:5000"},
+            ],
+            [
+                {"text": "≥ 10 000", "callback_data": "stclipmv:10000"},
+                {"text": "❌ Отмена", "callback_data": "stclip:cancel"},
+            ],
+        ]
     }
 
 def power_menu():
@@ -455,6 +503,11 @@ def handle_message(msg: dict):
         print(f"[auth] блок: uid={uid} @{user.get('username','')} text={text[:60]!r}", flush=True)
         return
 
+    # ---- FSM: ручной ввод параметров статистики клипов ----
+    # Должен идти ПЕРЕД основным меню, чтобы перехватывать ответы пользователя.
+    if _maybe_handle_stats_dialog(chat_id, uid, text):
+        return
+
     # ---- видео-документы ----
     if any(k in msg for k in ("video", "video_note")) or (
         "document" in msg and "video" in (msg["document"].get("mime_type") or "")
@@ -513,6 +566,23 @@ def handle_message(msg: dict):
             period = parts[1]
         push_task("stats", uid, chat_id=chat_id, args={"period": period})
         send(chat_id, f"📈 Считаю статистику за {period}…", reply_markup=main_menu()); return
+
+    # --- новые: сбор групп и стата клипов ---
+    if text == "📁 Сбор групп" or low == "/collect_groups":
+        push_task("collect_groups", uid, chat_id=chat_id)
+        send(chat_id,
+             "📁 Запустил сбор управляемых сообществ.\n"
+             "На ПК откроется Chrome → vk.com/groups?tab=admin.\n"
+             "Жди отчёт. Создадутся пустые папки input/<id>/.",
+             reply_markup=main_menu()); return
+
+    if text == "🎯 Стата клипов" or low == "/clip_stats":
+        send(chat_id,
+             "🎯 Статистика клипов VK.\n\n"
+             "Выбери период публикации. Сразу после — выберешь порог просмотров.\n"
+             "⚠️ В pc_agent.env должен быть VK_TOKEN.",
+             reply_markup=clips_stats_period_inline())
+        return
 
     if text == "📜 Лог" or low == "/log":
         if not last_lines:
@@ -632,6 +702,103 @@ def handle_message(msg: dict):
 
     send(chat_id, "Не понял. /menu", reply_markup=main_menu())
 
+# ---------- STATS-CLIPS FSM ----------
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _gc_stats_dialog():
+    """Чистим протухшие FSM-сессии."""
+    now = time.time()
+    with state_lock:
+        dead = [cid for cid, st in pending_stats_dialog.items()
+                if now - st.get("started_at", now) > STATS_DIALOG_TTL_SEC]
+        for cid in dead:
+            pending_stats_dialog.pop(cid, None)
+
+
+def _maybe_handle_stats_dialog(chat_id, uid, text: str) -> bool:
+    """
+    Если для chat_id идёт FSM-диалог ручного ввода — обрабатывает шаг.
+    Возвращает True если перехватил сообщение (дальше handle_message не идёт).
+    """
+    _gc_stats_dialog()
+    with state_lock:
+        state = pending_stats_dialog.get(int(chat_id))
+    if not state:
+        return False
+
+    low = (text or "").lower().strip()
+    if low in ("/cancel", "отмена", "cancel", "❌", "стоп"):
+        with state_lock:
+            pending_stats_dialog.pop(int(chat_id), None)
+        send(chat_id, "❌ Диалог статистики отменён.", reply_markup=main_menu())
+        return True
+
+    step = state.get("step")
+    if step == "from":
+        if not DATE_RE.match(text):
+            send(chat_id, "⚠️ Формат YYYY-MM-DD (например 2026-01-15). Или /cancel.")
+            return True
+        state["date_from"] = text
+        state["step"] = "to"
+        send(chat_id, f"📅 Дата ОТ = {text}.\n\nТеперь введи дату ДО (YYYY-MM-DD):")
+        return True
+
+    if step == "to":
+        if not DATE_RE.match(text):
+            send(chat_id, "⚠️ Формат YYYY-MM-DD. Или /cancel.")
+            return True
+        state["date_to"] = text
+        state["step"] = "views"
+        send(chat_id, f"📅 Дата ДО = {text}.\n\nТеперь выбери мин. просмотры:",
+             reply_markup=clips_stats_threshold_inline())
+        return True
+
+    if step == "views":
+        # Юзер мог ввести число руками вместо нажатия inline-кнопки
+        try:
+            mv = int(text.replace(" ", "").replace("_", ""))
+            if mv < 0:
+                raise ValueError
+        except ValueError:
+            send(chat_id, "⚠️ Введи целое число (например 1000) или жми кнопку.")
+            return True
+        # Запускаем задачу
+        df = state.get("date_from"); dt = state.get("date_to")
+        with state_lock:
+            pending_stats_dialog.pop(int(chat_id), None)
+        push_task("clips_stats", uid, chat_id=chat_id,
+                  args={"date_from": df, "date_to": dt, "min_views": mv})
+        send(chat_id,
+             f"🚀 Задача отправлена.\n"
+             f"Период: {df} … {dt}\n"
+             f"Мин. просмотры: {mv}\n"
+             f"Жди — xlsx придёт сюда.",
+             reply_markup=main_menu())
+        return True
+
+    # Неизвестный шаг — сбрасываем
+    with state_lock:
+        pending_stats_dialog.pop(int(chat_id), None)
+    return False
+
+
+def _start_clips_stats_task(chat_id, uid, days: int, min_views: int = 1000):
+    """Хелпер: посчитать дату ОТ как (сегодня - N дней) и запушить задачу."""
+    from datetime import datetime, timedelta, timezone
+    today = datetime.now(timezone.utc)
+    df = (today - timedelta(days=days)).strftime("%Y-%m-%d")
+    dt = today.strftime("%Y-%m-%d")
+    push_task("clips_stats", uid, chat_id=chat_id,
+              args={"date_from": df, "date_to": dt, "min_views": min_views})
+    send(chat_id,
+         f"🚀 Задача отправлена.\n"
+         f"Период: {df} … {dt} ({days} дней)\n"
+         f"Мин. просмотры: {min_views}\n"
+         f"Жди — xlsx придёт сюда.",
+         reply_markup=main_menu())
+
+
 # ---------- CALLBACK QUERY ----------
 def handle_callback_query(cb: dict):
     global power_after_finish
@@ -646,6 +813,80 @@ def handle_callback_query(cb: dict):
 
     if not is_authed(uid):
         tg_answer_callback(cb_id, "❌ Нет доступа", show_alert=True); return
+
+    # --- Stats-clips: выбор периода ---
+    if data.startswith("stclip:"):
+        choice = data.split(":", 1)[1]
+        if choice == "cancel":
+            with state_lock:
+                pending_stats_dialog.pop(int(chat_id), None)
+            tg_answer_callback(cb_id, "Отменено")
+            tg_edit_message(chat_id, msg_id, "❌ Сбор статистики отменён.")
+            return
+        if choice == "custom":
+            with state_lock:
+                pending_stats_dialog[int(chat_id)] = {
+                    "step": "from",
+                    "started_at": time.time(),
+                }
+            tg_answer_callback(cb_id, "Введи даты")
+            tg_edit_message(chat_id, msg_id,
+                            "⌨️ Ручной ввод.\n\n"
+                            "Введи дату ОТ в формате YYYY-MM-DD (например 2026-01-15).\n"
+                            "Любое сообщение /cancel — отмена.")
+            return
+        # Быстрый период: число дней
+        try:
+            days = int(choice)
+        except ValueError:
+            tg_answer_callback(cb_id, "Ошибка"); return
+        # Сразу спрашиваем порог через inline
+        with state_lock:
+            pending_stats_dialog[int(chat_id)] = {
+                "step": "views_quick",
+                "days": days,
+                "started_at": time.time(),
+            }
+        tg_answer_callback(cb_id, f"Период {days} дней")
+        tg_edit_message(chat_id, msg_id,
+                        f"📅 Период: последние {days} дней.\n\nВыбери мин. просмотры:",
+                        reply_markup=clips_stats_threshold_inline())
+        return
+
+    # --- Stats-clips: выбор порога просмотров ---
+    if data.startswith("stclipmv:"):
+        try:
+            mv = int(data.split(":", 1)[1])
+        except ValueError:
+            tg_answer_callback(cb_id, "Ошибка"); return
+        with state_lock:
+            state = pending_stats_dialog.pop(int(chat_id), None)
+        if not state:
+            tg_answer_callback(cb_id, "Сессия истекла", show_alert=True)
+            tg_edit_message(chat_id, msg_id, "⚠️ Сессия истекла. Нажми «🎯 Стата клипов» снова.")
+            return
+
+        if state.get("step") == "views_quick":
+            # Быстрый период
+            days = int(state.get("days", 30))
+            tg_answer_callback(cb_id, f"Запускаю ({days} дней, ≥ {mv})")
+            tg_edit_message(chat_id, msg_id,
+                            f"🚀 Запускаю: последние {days} дней, ≥ {mv} просмотров.")
+            _start_clips_stats_task(chat_id, uid, days=days, min_views=mv)
+            return
+        elif state.get("step") == "views":
+            # Из ручного FSM
+            df = state.get("date_from"); dt = state.get("date_to")
+            tg_answer_callback(cb_id, f"Запускаю (≥ {mv})")
+            tg_edit_message(chat_id, msg_id,
+                            f"🚀 Запускаю: {df} … {dt}, ≥ {mv} просмотров.")
+            push_task("clips_stats", uid, chat_id=chat_id,
+                      args={"date_from": df, "date_to": dt, "min_views": mv})
+            send(chat_id, "Жди — xlsx придёт сюда.", reply_markup=main_menu())
+            return
+        else:
+            tg_answer_callback(cb_id, "Неожиданное состояние")
+            return
 
     # Видеозапись N сек
     if data.startswith("rec:"):
