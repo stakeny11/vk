@@ -184,6 +184,26 @@ def main_menu():
     }
 
 
+def start_vk_count_inline():
+    """Выбор скольких сообществ заливать за один запуск."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "5 сообществ",   "callback_data": "startvk:5"},
+                {"text": "10 сообществ",  "callback_data": "startvk:10"},
+            ],
+            [
+                {"text": "20 сообществ",  "callback_data": "startvk:20"},
+                {"text": "40 сообществ",  "callback_data": "startvk:40"},
+            ],
+            [
+                {"text": "🚀 Все сразу",    "callback_data": "startvk:0"},
+                {"text": "❌ Отмена",        "callback_data": "startvk:cancel"},
+            ],
+        ]
+    }
+
+
 def clips_stats_period_inline():
     """Быстрые варианты периода для статистики клипов."""
     return {
@@ -530,11 +550,11 @@ def handle_message(msg: dict):
 
     # --- основные ---
     if text == "▶️ Запустить заливку" or low == "/run":
-        push_task("start_vk", uid, chat_id=chat_id)
         send(chat_id,
-             "✅ Задача в очереди. ПК онлайн — заберёт в течение 5 сек." if pc_is_online() else
-             "🔌 Задача в очереди. ПК офлайн — выполнится как только включится.",
-             reply_markup=main_menu())
+             "🎯 Сколько сообществ заливать за один запуск?\n\n"
+             "Маленькое число (5-10) — безопаснее для антибота VK.\n"
+             "Большое (20-40+) — быстрее, но риск капчи выше.",
+             reply_markup=start_vk_count_inline())
         return
 
     if text == "⏹ Стоп" or low == "/stop":
@@ -813,6 +833,34 @@ def handle_callback_query(cb: dict):
 
     if not is_authed(uid):
         tg_answer_callback(cb_id, "❌ Нет доступа", show_alert=True); return
+
+    # --- Запуск заливки: выбор количества сообществ ---
+    if data.startswith("startvk:"):
+        choice = data.split(":", 1)[1]
+        if choice == "cancel":
+            tg_answer_callback(cb_id, "Отменено")
+            tg_edit_message(chat_id, msg_id, "❌ Запуск отменён.")
+            return
+        try:
+            n = int(choice)
+            if n < 0: n = 0
+        except ValueError:
+            tg_answer_callback(cb_id, "Ошибка"); return
+
+        # Запускаем заливку с лимитом max_groups
+        push_task("start_vk", uid, chat_id=chat_id,
+                  args={"max_groups": n})
+        label = "все" if n == 0 else str(n)
+        tg_answer_callback(cb_id, f"Запускаю: {label} сообществ")
+        online = pc_is_online()
+        tail = ("ПК онлайн — заберёт в течение 5 сек."
+                if online
+                else "ПК офлайн — выполнится как только включится.")
+        tg_edit_message(chat_id, msg_id,
+                        f"✅ Задача в очереди.\n"
+                        f"🎯 Лимит: {label} сообществ\n"
+                        f"💻 {tail}")
+        return
 
     # --- Stats-clips: выбор периода ---
     if data.startswith("stclip:"):
