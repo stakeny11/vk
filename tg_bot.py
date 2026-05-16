@@ -170,8 +170,8 @@ send = tg_send_text  # обратная совместимость
 def main_menu():
     return {
         "keyboard": [
-            [{"text": "▶️ Запустить заливку"}, {"text": "⏹ Стоп"}],
-            [{"text": "🔍 Что сейчас"}, {"text": "📊 Статус"}],
+            [{"text": "▶️ Запустить заливку"}, {"text": "▶️ Продолжить заливку"}],
+            [{"text": "⏹ Стоп"}, {"text": "🔍 Что сейчас"}, {"text": "📊 Статус"}],
             [{"text": "📂 Input"}, {"text": "📈 Статистика"}],
             [{"text": "📁 Сбор групп"}, {"text": "🎯 Стата клипов"}],
             [{"text": "🔁 Retry"}, {"text": "⚖️ Раскидать input"}, {"text": "🧹 Очистить очередь"}],
@@ -551,15 +551,34 @@ def handle_message(msg: dict):
     # --- основные ---
     if text == "▶️ Запустить заливку" or low == "/run":
         send(chat_id,
-             "🎯 Сколько сообществ заливать за один запуск?\n\n"
-             "Маленькое число (5-10) — безопаснее для антибота VK.\n"
-             "Большое (20-40+) — быстрее, но риск капчи выше.",
+             "🎯 Сколько сообществ загружать ЗА ОДИН ЭТАП?\n\n"
+             "После каждого этапа скрипт остановится — публикуешь руками,\n"
+             "закрываешь вкладки, потом жмёшь «▶️ Продолжить заливку»\n"
+             "и идёт следующий этап.",
              reply_markup=start_vk_count_inline())
         return
 
+    if text == "▶️ Продолжить заливку" or low == "/continue":
+        push_task("continue_stage", uid, chat_id=chat_id)
+        send(chat_id, "▶️ Сигнал отправлен. Скрипт начнёт следующий этап.",
+             reply_markup=main_menu())
+        return
+
     if text == "⏹ Стоп" or low == "/stop":
+        # Сначала отправляем мягкий сигнал stage_stop (скрипт завершится
+        # между этапами с сохранением state). Если скрипт уже выполняет
+        # этап — он закончит его и потом увидит сигнал.
+        push_task("stop_stage", uid, chat_id=chat_id)
+        send(chat_id,
+             "🛑 Команда мягкой остановки в очереди.\n"
+             "Скрипт завершится между этапами (state сохранится).\n\n"
+             "Если нужно жёстко прибить процесс — /forcestop",
+             reply_markup=main_menu()); return
+
+    if low == "/forcestop" or text == "⏹ Force-стоп":
         push_task("stop_vk", uid, chat_id=chat_id)
-        send(chat_id, "🛑 Команда остановки в очереди.", reply_markup=main_menu()); return
+        send(chat_id, "🛑 Команда жёсткой остановки (kill процесса) в очереди.",
+             reply_markup=main_menu()); return
 
     if text == "🔍 Что сейчас" or low == "/now":
         send(chat_id, build_now_text(), reply_markup=main_menu()); return
@@ -847,19 +866,20 @@ def handle_callback_query(cb: dict):
         except ValueError:
             tg_answer_callback(cb_id, "Ошибка"); return
 
-        # Запускаем заливку с лимитом max_groups
+        # Запускаем заливку с размером этапа stage_size
         push_task("start_vk", uid, chat_id=chat_id,
-                  args={"max_groups": n})
-        label = "все" if n == 0 else str(n)
-        tg_answer_callback(cb_id, f"Запускаю: {label} сообществ")
+                  args={"stage_size": n})
+        label = "все сразу (один этап)" if n == 0 else f"{n} за этап"
+        tg_answer_callback(cb_id, f"Запускаю: {label}")
         online = pc_is_online()
         tail = ("ПК онлайн — заберёт в течение 5 сек."
                 if online
                 else "ПК офлайн — выполнится как только включится.")
         tg_edit_message(chat_id, msg_id,
                         f"✅ Задача в очереди.\n"
-                        f"🎯 Лимит: {label} сообществ\n"
-                        f"💻 {tail}")
+                        f"🎯 Размер этапа: {label}\n"
+                        f"💻 {tail}\n\n"
+                        f"После каждого этапа жми «▶️ Продолжить заливку».")
         return
 
     # --- Stats-clips: выбор периода ---
