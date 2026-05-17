@@ -174,13 +174,29 @@ def main_menu():
             [{"text": "⏹ Стоп"}, {"text": "🔍 Что сейчас"}, {"text": "📊 Статус"}],
             [{"text": "📂 Input"}, {"text": "📈 Статистика"}],
             [{"text": "📁 Сбор групп"}, {"text": "🎯 Стата клипов"}],
-            [{"text": "🔁 Retry"}, {"text": "⚖️ Раскидать input"}, {"text": "🧹 Очистить очередь"}],
+            [{"text": "🔁 Retry"}, {"text": "⚖️ Раскидать input"}, {"text": "🎲 Перемешать видео"}],
+            [{"text": "🧹 Очистить очередь"}],
             [{"text": "📸 Скрин"}, {"text": "🎬 Видео ПК"}],
             [{"text": "📜 Лог"}, {"text": "📋 Ошибки"}, {"text": "📤 Лог-файлы"}],
             [{"text": "🔔 Smart"}, {"text": "👁 All logs"}],
             [{"text": "⚙️ Управление ПК"}, {"text": "⏏️ После залива"}],
         ],
         "resize_keyboard": True,
+    }
+
+
+def shuffle_confirm_inline():
+    """Выбор: dry-run или реальное перемешивание."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🔍 Dry-run (только план)", "callback_data": "shuffle:dry"},
+                {"text": "🎲 Перемешать!",           "callback_data": "shuffle:do"},
+            ],
+            [
+                {"text": "❌ Отмена",                 "callback_data": "shuffle:cancel"},
+            ],
+        ]
     }
 
 
@@ -564,6 +580,16 @@ def handle_message(msg: dict):
              reply_markup=main_menu())
         return
 
+    if text == "🎲 Перемешать видео" or low == "/shuffle":
+        send(chat_id,
+             "🎲 Перемешать видео между папками сообществ?\n\n"
+             "Каждая папка СОХРАНИТ свой размер, но содержимое будет\n"
+             "случайно перетасовано между всеми папками.\n\n"
+             "• Dry-run — показать план без перемещения\n"
+             "• Перемешать! — реально переместить (необратимо)",
+             reply_markup=shuffle_confirm_inline())
+        return
+
     if text == "⏹ Стоп" or low == "/stop":
         # Сначала отправляем мягкий сигнал stage_stop (скрипт завершится
         # между этапами с сохранением state). Если скрипт уже выполняет
@@ -852,6 +878,31 @@ def handle_callback_query(cb: dict):
 
     if not is_authed(uid):
         tg_answer_callback(cb_id, "❌ Нет доступа", show_alert=True); return
+
+    # --- Перемешать видео между папками ---
+    if data.startswith("shuffle:"):
+        choice = data.split(":", 1)[1]
+        if choice == "cancel":
+            tg_answer_callback(cb_id, "Отменено")
+            tg_edit_message(chat_id, msg_id, "❌ Shuffle отменён.")
+            return
+        if choice == "dry":
+            push_task("shuffle_input", uid, chat_id=chat_id,
+                      args={"dry_run": True})
+            tg_answer_callback(cb_id, "Dry-run запущен")
+            tg_edit_message(chat_id, msg_id,
+                            "🔍 Dry-run shuffle запущен.\n"
+                            "Скрипт покажет план перемещений — реально файлы не двигаются.")
+            return
+        if choice == "do":
+            push_task("shuffle_input", uid, chat_id=chat_id, args={})
+            tg_answer_callback(cb_id, "Перемешиваю!")
+            tg_edit_message(chat_id, msg_id,
+                            "🎲 Shuffle запущен.\n"
+                            "Видео перемешиваются между папками. Отчёт придёт по окончании.")
+            return
+        tg_answer_callback(cb_id, "Неизвестно")
+        return
 
     # --- Запуск заливки: выбор количества сообществ ---
     if data.startswith("startvk:"):
