@@ -264,6 +264,7 @@ def power_menu():
         "keyboard": [
             [{"text": "🔌 Выключить"}, {"text": "😴 Сон"}],
             [{"text": "🔒 Заблокировать"}, {"text": "🔄 Перезагрузка"}],
+            [{"text": "🌑 Выключить экран"}],
             [{"text": "← Главное меню"}],
         ],
         "resize_keyboard": True,
@@ -733,6 +734,13 @@ def handle_message(msg: dict):
         send(chat_id, "🔒 Заблокировать экран?", reply_markup=confirm_inline("lock_now", "Заблокировать")); return
     if text == "🔄 Перезагрузка":
         send(chat_id, "🔄 Перезагрузить ПК сейчас?", reply_markup=confirm_inline("reboot_now", "Перезагрузить")); return
+    if text == "🌑 Выключить экран" or low == "/screenoff":
+        # Без подтверждения — действие безобидное (мышь шевельнул и обратно).
+        push_task("screen_off", uid, chat_id=chat_id)
+        send(chat_id,
+             "🌑 Экран будет выключен.\n"
+             "Чтобы включить обратно — двинь мышь или нажми любую клавишу на ПК.",
+             reply_markup=power_menu()); return
 
     # --- меню "после залива" ---
     if text == "⏏️ После залива":
