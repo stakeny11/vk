@@ -175,13 +175,33 @@ def main_menu():
             [{"text": "📂 Input"}, {"text": "📈 Статистика"}],
             [{"text": "📁 Сбор групп"}, {"text": "🎯 Стата клипов"}],
             [{"text": "🔁 Retry"}, {"text": "⚖️ Раскидать input"}, {"text": "🎲 Перемешать видео"}],
-            [{"text": "🧹 Очистить очередь"}],
+            [{"text": "📦 Из архива"}, {"text": "🧹 Очистить очередь"}],
             [{"text": "📸 Скрин"}, {"text": "🎬 Видео ПК"}],
             [{"text": "📜 Лог"}, {"text": "📋 Ошибки"}, {"text": "📤 Лог-файлы"}],
             [{"text": "🔔 Smart"}, {"text": "👁 All logs"}],
             [{"text": "⚙️ Управление ПК"}, {"text": "⏏️ После залива"}],
         ],
         "resize_keyboard": True,
+    }
+
+
+def refill_count_inline():
+    """Выбор сколько видео в каждой папке для refill из архива."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "5 в папку",   "callback_data": "refill:5"},
+                {"text": "9 в папку",   "callback_data": "refill:9"},
+            ],
+            [
+                {"text": "12 в папку",  "callback_data": "refill:12"},
+                {"text": "15 в папку",  "callback_data": "refill:15"},
+            ],
+            [
+                {"text": "🔍 Dry-run (9)", "callback_data": "refill:dry"},
+                {"text": "❌ Отмена",       "callback_data": "refill:cancel"},
+            ],
+        ]
     }
 
 
@@ -591,6 +611,37 @@ def handle_message(msg: dict):
              reply_markup=shuffle_confirm_inline())
         return
 
+    if text == "📦 Из архива" or low == "/refill":
+        send(chat_id,
+             "📦 Заполнить папки сообществ из архива?\n\n"
+             "Скрипт возьмёт случайные видео из archive/ и положит N в каждую\n"
+             "папку input/<gid>/. Старое содержимое удалится.\n\n"
+             "Архив сам не модифицируется — используем hard-link.\n\n"
+             "Выбери сколько видео в каждую папку:",
+             reply_markup=refill_count_inline())
+        return
+
+    if low == "/migrate_to_archive":
+        send(chat_id,
+             "📤 Перенести ВСЕ видео из input/<gid>/ в archive/?\n\n"
+             "Что произойдёт:\n"
+             "• Все .mp4 из всех папок input/ → переедут в archive/\n"
+             "• Папки input/ останутся (но пустые)\n"
+             "• Коллизии имён разрулятся суффиксом _2, _3, …\n"
+             "• Архив создастся если его нет\n\n"
+             "После можно «📦 Из архива» чтобы вернуть рандом в input/.\n\n"
+             "Выбери:",
+             reply_markup={
+                 "inline_keyboard": [[
+                     {"text": "🔍 Dry-run",            "callback_data": "migrate:dry"},
+                     {"text": "📤 Перенести!",         "callback_data": "migrate:do"},
+                 ], [
+                     {"text": "📤 С префиксом gid",    "callback_data": "migrate:prefix"},
+                     {"text": "❌ Отмена",             "callback_data": "migrate:cancel"},
+                 ]]
+             })
+        return
+
     if text == "⏹ Стоп" or low == "/stop":
         # Сначала отправляем мягкий сигнал stage_stop (скрипт завершится
         # между этапами с сохранением state). Если скрипт уже выполняет
@@ -886,6 +937,70 @@ def handle_callback_query(cb: dict):
 
     if not is_authed(uid):
         tg_answer_callback(cb_id, "❌ Нет доступа", show_alert=True); return
+
+    # --- Migrate input → archive ---
+    if data.startswith("migrate:"):
+        choice = data.split(":", 1)[1]
+        if choice == "cancel":
+            tg_answer_callback(cb_id, "Отменено")
+            tg_edit_message(chat_id, msg_id, "❌ Migrate отменён.")
+            return
+        if choice == "dry":
+            push_task("migrate_to_archive", uid, chat_id=chat_id,
+                      args={"dry_run": True})
+            tg_answer_callback(cb_id, "Dry-run запущен")
+            tg_edit_message(chat_id, msg_id,
+                            "🔍 Migrate DRY-RUN запущен.\n"
+                            "Покажет план — ничего не переместит.")
+            return
+        if choice == "do":
+            push_task("migrate_to_archive", uid, chat_id=chat_id, args={})
+            tg_answer_callback(cb_id, "Перенос запущен")
+            tg_edit_message(chat_id, msg_id,
+                            "📤 Migrate запущен — переношу видео в archive/.\n"
+                            "Отчёт придёт по окончании.")
+            return
+        if choice == "prefix":
+            push_task("migrate_to_archive", uid, chat_id=chat_id,
+                      args={"prefix_gid": True})
+            tg_answer_callback(cb_id, "С префиксом gid")
+            tg_edit_message(chat_id, msg_id,
+                            "📤 Migrate запущен (с префиксом gid в именах).\n"
+                            "В archive/ файлы будут как <gid>_<имя>.mp4")
+            return
+        tg_answer_callback(cb_id, "Неизвестно")
+        return
+
+    # --- Refill из архива ---
+    if data.startswith("refill:"):
+        choice = data.split(":", 1)[1]
+        if choice == "cancel":
+            tg_answer_callback(cb_id, "Отменено")
+            tg_edit_message(chat_id, msg_id, "❌ Refill отменён.")
+            return
+        if choice == "dry":
+            push_task("refill_from_archive", uid, chat_id=chat_id,
+                      args={"per_folder": 9, "dry_run": True})
+            tg_answer_callback(cb_id, "Dry-run запущен")
+            tg_edit_message(chat_id, msg_id,
+                            "🔍 Refill DRY-RUN запущен.\n"
+                            "Покажет план — ничего не скопирует.")
+            return
+        try:
+            n = int(choice)
+            if n <= 0 or n > 100:
+                tg_answer_callback(cb_id, "Некорректно"); return
+        except ValueError:
+            tg_answer_callback(cb_id, "Ошибка"); return
+
+        push_task("refill_from_archive", uid, chat_id=chat_id,
+                  args={"per_folder": n})
+        tg_answer_callback(cb_id, f"Refill: {n} в папку")
+        tg_edit_message(chat_id, msg_id,
+                        f"📦 Refill запущен.\n"
+                        f"По {n} видео в каждую папку из архива.\n"
+                        f"Старое будет удалено. Отчёт придёт по окончании.")
+        return
 
     # --- Перемешать видео между папками ---
     if data.startswith("shuffle:"):
