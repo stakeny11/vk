@@ -175,13 +175,28 @@ def main_menu():
             [{"text": "📂 Input"}, {"text": "📈 Статистика"}],
             [{"text": "📁 Сбор групп"}, {"text": "🎯 Стата клипов"}],
             [{"text": "🔁 Retry"}, {"text": "⚖️ Раскидать input"}, {"text": "🎲 Перемешать видео"}],
-            [{"text": "📦 Из архива"}, {"text": "🧹 Очистить очередь"}],
+            [{"text": "📦 Из архива"}, {"text": "🎵 TikTok stats"}, {"text": "🧹 Очистить очередь"}],
             [{"text": "📸 Скрин"}, {"text": "🎬 Видео ПК"}],
             [{"text": "📜 Лог"}, {"text": "📋 Ошибки"}, {"text": "📤 Лог-файлы"}],
             [{"text": "🔔 Smart"}, {"text": "👁 All logs"}],
             [{"text": "⚙️ Управление ПК"}, {"text": "⏏️ После залива"}],
         ],
         "resize_keyboard": True,
+    }
+
+
+def tiktok_run_inline():
+    """Запуск TikTok-сбора. Период берётся из tiktok_scraper.js."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🚀 Запустить!",     "callback_data": "tiktok:run"},
+            ],
+            [
+                {"text": "🔐 Залогиниться",   "callback_data": "tiktok:login"},
+                {"text": "❌ Отмена",          "callback_data": "tiktok:cancel"},
+            ],
+        ]
     }
 
 
@@ -621,6 +636,17 @@ def handle_message(msg: dict):
              reply_markup=refill_count_inline())
         return
 
+    if text == "🎵 TikTok stats" or low == "/tiktok":
+        send(chat_id,
+             "🎵 Собрать статистику видео из TikTok Studio?\n\n"
+             "Период берётся из файла tiktok_scraper.js (там сейчас\n"
+             "указан диапазон — поменяй в файле когда понадобится).\n\n"
+             "Скрипт пришлёт сюда TSV-таблицу и ZIP со скринами.\n\n"
+             "Первый раз нужно «🔐 Залогиниться» — открыть Chrome руками,\n"
+             "войти в TikTok, закрыть окно. Дальше профиль помнится.",
+             reply_markup=tiktok_run_inline())
+        return
+
     if low == "/migrate_to_archive":
         send(chat_id,
              "📤 Перенести ВСЕ видео из input/<gid>/ в archive/?\n\n"
@@ -937,6 +963,39 @@ def handle_callback_query(cb: dict):
 
     if not is_authed(uid):
         tg_answer_callback(cb_id, "❌ Нет доступа", show_alert=True); return
+
+    # --- TikTok stats ---
+    if data.startswith("tiktok:"):
+        choice = data.split(":", 1)[1]
+        if choice == "cancel":
+            tg_answer_callback(cb_id, "Отменено")
+            tg_edit_message(chat_id, msg_id, "❌ TikTok отменён.")
+            return
+        if choice == "login":
+            push_task("tiktok_stats", uid, chat_id=chat_id, args={"login": True})
+            tg_answer_callback(cb_id, "Login mode")
+            tg_edit_message(chat_id, msg_id,
+                            "🔐 Login mode: на ПК откроется Chrome (через прокси).\n"
+                            "1. Зайди в TikTok\n"
+                            "2. Залогинься\n"
+                            "3. Закрой окно Chrome\n\n"
+                            "Профиль сохранится. Дальше «🎵 TikTok stats» "
+                            "→ «🚀 Запустить!» → результаты придут сюда.")
+            return
+        if choice == "run":
+            push_task("tiktok_stats", uid, chat_id=chat_id, args={})
+            tg_answer_callback(cb_id, "TikTok запущен")
+            tg_edit_message(chat_id, msg_id,
+                            "🎵 TikTok stats запущен.\n"
+                            "Период берётся из tiktok_scraper.js.\n\n"
+                            "Скрипт сам пришлёт сюда:\n"
+                            "• 📊 TSV таблицу со всеми видео\n"
+                            "• 📸 ZIP со скриншотами\n"
+                            "• 📅 Сводку по дням\n\n"
+                            "Ждать 5-30 мин (зависит от объёма).")
+            return
+        tg_answer_callback(cb_id, "Неизвестно")
+        return
 
     # --- Migrate input → archive ---
     if data.startswith("migrate:"):
