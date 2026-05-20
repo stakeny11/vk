@@ -176,12 +176,35 @@ def main_menu():
             [{"text": "📁 Сбор групп"}, {"text": "🎯 Стата клипов"}],
             [{"text": "🔁 Retry"}, {"text": "⚖️ Раскидать input"}, {"text": "🎲 Перемешать видео"}],
             [{"text": "📦 Из архива"}, {"text": "🎵 TikTok stats"}, {"text": "🧹 Очистить очередь"}],
+            [{"text": "🎬 Banner render"}],
             [{"text": "📸 Скрин"}, {"text": "🎬 Видео ПК"}],
             [{"text": "📜 Лог"}, {"text": "📋 Ошибки"}, {"text": "📤 Лог-файлы"}],
             [{"text": "🔔 Smart"}, {"text": "👁 All logs"}],
             [{"text": "⚙️ Управление ПК"}, {"text": "⏏️ После залива"}],
         ],
         "resize_keyboard": True,
+    }
+
+
+def banner_run_inline():
+    """
+    Меню для banner: посмотреть папки + дождаться окончания твоего скрипта
+    и выключить ПК. Сам скрипт юзер запускает руками на ПК.
+    """
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "📂 Backgrounds", "callback_data": "banner:ls_bg"},
+                {"text": "📁 Outputs",     "callback_data": "banner:ls_out"},
+            ],
+            [
+                {"text": "🌙 Выкл когда скрипт завершится", "callback_data": "banner:wait_off"},
+            ],
+            [
+                {"text": "🔍 Сейчас работает?",  "callback_data": "banner:status"},
+                {"text": "❌ Отмена",             "callback_data": "banner:cancel"},
+            ],
+        ]
     }
 
 
@@ -636,6 +659,33 @@ def handle_message(msg: dict):
              reply_markup=refill_count_inline())
         return
 
+    if low == "/cancelshutdown":
+        push_task("power_action", uid, chat_id=chat_id, args={"action": "cancel_shutdown"})
+        send(chat_id, "↩️ Отправил команду отмены shutdown на ПК.")
+        return
+
+    if low == "/banner_stop_watch":
+        push_task("banner_stop_watch", uid, chat_id=chat_id, args={})
+        send(chat_id, "↩️ Останавливаю watcher banner-скрипта.")
+        return
+
+    if text == "🎬 Banner render" or low == "/banner":
+        send(chat_id,
+             "🎬 Banner script (test_fast_banner_gui_v6.py)\n\n"
+             "Сам скрипт ты запускаешь руками на ПК.\n"
+             "Бот может только:\n"
+             "• 📂 Показать что в backgrounds/ (input)\n"
+             "• 📁 Показать что в outputs/\n"
+             "• 🌙 Следить за процессом и выключить ПК "
+             "после того как ты сам закончишь рендер\n\n"
+             "Сценарий «ночь»:\n"
+             "1. Открываешь скрипт на ПК\n"
+             "2. Жмёшь сюда 🌙 в TG\n"
+             "3. Идёшь спать. Когда скрипт завершится — "
+             "ПК выключится автоматом.",
+             reply_markup=banner_run_inline())
+        return
+
     if text == "🎵 TikTok stats" or low == "/tiktok":
         send(chat_id,
              "🎵 Собрать статистику видео из TikTok Studio?\n\n"
@@ -963,6 +1013,42 @@ def handle_callback_query(cb: dict):
 
     if not is_authed(uid):
         tg_answer_callback(cb_id, "❌ Нет доступа", show_alert=True); return
+
+    # --- Banner: показ папок и watcher для auto-shutdown ---
+    if data.startswith("banner:"):
+        choice = data.split(":", 1)[1]
+        if choice == "cancel":
+            tg_answer_callback(cb_id, "Отменено")
+            tg_edit_message(chat_id, msg_id, "❌ Banner отменён.")
+            return
+        if choice == "ls_bg":
+            push_task("banner_list", uid, chat_id=chat_id,
+                      args={"folder": "backgrounds"})
+            tg_answer_callback(cb_id, "Список backgrounds…")
+            return
+        if choice == "ls_out":
+            push_task("banner_list", uid, chat_id=chat_id,
+                      args={"folder": "outputs"})
+            tg_answer_callback(cb_id, "Список outputs…")
+            return
+        if choice == "status":
+            push_task("banner_status", uid, chat_id=chat_id, args={})
+            tg_answer_callback(cb_id, "Проверяю…")
+            return
+        if choice == "wait_off":
+            push_task("banner_wait_and_shutdown", uid, chat_id=chat_id, args={})
+            tg_answer_callback(cb_id, "Жду окончания скрипта")
+            tg_edit_message(chat_id, msg_id,
+                            "🌙 Watcher запущен.\n\n"
+                            "Бот ждёт пока test_fast_banner_gui_v6.py "
+                            "появится среди процессов python.exe (до 5 мин), "
+                            "потом ждёт пока он завершится, потом "
+                            "выключает ПК через 60 сек.\n\n"
+                            "Если передумаешь — `/cancelshutdown` "
+                            "или `/banner_stop_watch`.")
+            return
+        tg_answer_callback(cb_id, "Неизвестно")
+        return
 
     # --- TikTok stats ---
     if data.startswith("tiktok:"):
